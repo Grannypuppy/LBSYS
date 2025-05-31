@@ -65,7 +65,8 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
     public ApiResult incBookStock(int bookId, int deltaStock) {
         Connection conn = connector.getConn();
         try {
-            PreparedStatement stmt = conn.prepareStatement("SELECT stock FROM book WHERE book_id = ?");
+            // 使用 FOR UPDATE 锁定图书记录，防止并发修改
+            PreparedStatement stmt = conn.prepareStatement("SELECT stock FROM book WHERE book_id = ? FOR UPDATE");
             stmt.setInt(1, bookId);
             ResultSet rs = stmt.executeQuery();
             if (!rs.next()) {
@@ -166,16 +167,16 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
         Connection conn = connector.getConn();
         try {
             conn.setAutoCommit(false);
-            // 查询图书是否存在
-            PreparedStatement checkBookstmt = conn.prepareStatement("SELECT * FROM book WHERE book_id = ?");
+            // 查询图书是否存在，使用 FOR UPDATE 锁定
+            PreparedStatement checkBookstmt = conn.prepareStatement("SELECT * FROM book WHERE book_id = ? FOR UPDATE");
             checkBookstmt.setInt(1, bookId);
             ResultSet checkBookRes = checkBookstmt.executeQuery();
             if (!checkBookRes.next()) {
                 return new ApiResult(false, "not exist such book_id");
             }
 
-            // 检查是否有未归还的借阅
-            PreparedStatement checkBorstmt = conn.prepareStatement("SELECT * FROM borrow WHERE book_id = ? AND (return_time<=borrow_time)");
+            // 检查是否有未归还的借阅，使用 FOR UPDATE 锁定相关借阅记录
+            PreparedStatement checkBorstmt = conn.prepareStatement("SELECT * FROM borrow WHERE book_id = ? AND (return_time<=borrow_time) FOR UPDATE");
             checkBorstmt.setInt(1, bookId);
             ResultSet checkBorRes = checkBorstmt.executeQuery();
             if (checkBorRes.next()) {
@@ -374,8 +375,8 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
         //先查询库中是否有这本书以及库存是否够，无则直接返回false
         //再查询是否有借阅记录，有则返回false
         try{
-            //检查库存
-            PreparedStatement stockstmt = conn.prepareStatement("SELECT * FROM book WHERE book_id = ? AND stock > 0");
+            //检查库存，使用 FOR UPDATE 锁定图书记录
+            PreparedStatement stockstmt = conn.prepareStatement("SELECT * FROM book WHERE book_id = ? AND stock > 0 FOR UPDATE");
             stockstmt.setInt(1, borrow.getBookId());
             ResultSet stockrs = stockstmt.executeQuery();
             if(!stockrs.next())
@@ -387,8 +388,8 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
             ResultSet cardrs = cardStmt.executeQuery();
             if(!cardrs.next())
                 return new ApiResult(false, "Card does not exist");
-            //检查过往借阅记录
-            PreparedStatement checkstmt = conn.prepareStatement("SELECT * FROM borrow WHERE card_id = ? AND book_id = ? AND return_time < borrow_time");
+            //检查过往借阅记录，使用 FOR UPDATE 锁定相关借阅记录
+            PreparedStatement checkstmt = conn.prepareStatement("SELECT * FROM borrow WHERE card_id = ? AND book_id = ? AND return_time < borrow_time FOR UPDATE");
             checkstmt.setInt(1, borrow.getCardId());
             checkstmt.setInt(2, borrow.getBookId());
             ResultSet checkrs = checkstmt.executeQuery();
@@ -414,6 +415,7 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
                 rollback(conn);
                 return new ApiResult(false,"borrow insert failed");
             }
+            commit(conn);
             return new ApiResult(true,"borrow succeed");
         }
         catch(Exception e)
@@ -428,13 +430,20 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
     public ApiResult returnBook(Borrow borrow) {
         Connection conn = connector.getConn();
         try{
-            PreparedStatement returncheckstmt = conn.prepareStatement("SELECT * from borrow WHERE card_id = ? AND book_id = ? AND (return_time <= borrow_time || return_time = 0) AND borrow_time < ?");
+            // 使用 FOR UPDATE 锁定借阅记录，防止并发归还同一本书
+            PreparedStatement returncheckstmt = conn.prepareStatement("SELECT * from borrow WHERE card_id = ? AND book_id = ? AND (return_time <= borrow_time || return_time = 0) AND borrow_time < ? FOR UPDATE");
             returncheckstmt.setInt(1,borrow.getCardId());
             returncheckstmt.setInt(2,borrow.getBookId());
             returncheckstmt.setLong(3,borrow.getReturnTime());
             ResultSet returnrs = returncheckstmt.executeQuery();
             if(!returnrs.next())
                 return new ApiResult(false,"no such borrow record");
+            
+            // 锁定图书记录后更新库存
+            PreparedStatement lockBookStmt = conn.prepareStatement("SELECT * FROM book WHERE book_id = ? FOR UPDATE");
+            lockBookStmt.setInt(1, borrow.getBookId());
+            lockBookStmt.executeQuery();
+            
             PreparedStatement stkupstmt = conn.prepareStatement("UPDATE book SET stock = stock+1 WHERE book_id = ?");
             stkupstmt.setInt(1, borrow.getBookId());
             int effected_row = stkupstmt.executeUpdate();
@@ -452,6 +461,7 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
                 rollback(conn);
                 return new ApiResult(false,"fail to update return_time: effected_row != 1");
             }
+            commit(conn);
             return new ApiResult(true,"return succeed");
         }
         catch(Exception e)
@@ -551,17 +561,17 @@ public class LibraryManagementSystemImpl implements LibraryManagementSystem {
     public ApiResult removeCard(int cardId) {
         Connection conn = connector.getConn();
         try {
-            // 首先检查卡是否存在
-            PreparedStatement checkCardStmt = conn.prepareStatement("SELECT * FROM card WHERE card_id = ?");
+            // 首先检查卡是否存在，使用 FOR UPDATE 锁定
+            PreparedStatement checkCardStmt = conn.prepareStatement("SELECT * FROM card WHERE card_id = ? FOR UPDATE");
             checkCardStmt.setInt(1, cardId);
             ResultSet cardRs = checkCardStmt.executeQuery();
             if (!cardRs.next()) {
                 return new ApiResult(false, "Card not found");
             }
 
-            // 检查是否有未归还的书籍
+            // 检查是否有未归还的书籍，使用 FOR UPDATE 锁定相关借阅记录
             PreparedStatement checkBorrowStmt = conn.prepareStatement(
-                "SELECT * FROM borrow WHERE card_id = ? AND (return_time < borrow_time OR return_time = 0)"
+                "SELECT * FROM borrow WHERE card_id = ? AND (return_time < borrow_time OR return_time = 0) FOR UPDATE"
             );
             checkBorrowStmt.setInt(1, cardId);
             ResultSet borrowRs = checkBorrowStmt.executeQuery();
