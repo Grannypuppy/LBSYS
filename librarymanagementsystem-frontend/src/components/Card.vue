@@ -10,10 +10,10 @@
         <div style="display: flex;flex-wrap: wrap; justify-content: start;">
 
             <!-- 借书证卡片 -->
-            <div class="cardBox" v-for="card in cards" v-show="card.name.includes(toSearch)" :key="card.id">
+            <div class="cardBox" v-for="card in cards" v-show="card.name.includes(toSearch)" :key="card.cardId">
                 <div>
                     <!-- 卡片标题 -->
-                    <div style="font-size: 25px; font-weight: bold;">No. {{ card.id }}</div>
+                    <div style="font-size: 25px; font-weight: bold;">No. {{ card.cardId }}</div>
 
                     <el-divider />
 
@@ -21,18 +21,18 @@
                     <div style="margin-left: 10px; text-align: start; font-size: 16px;">
                         <p style="padding: 2.5px;"><span style="font-weight: bold;">姓名：</span>{{ card.name }}</p>
                         <p style="padding: 2.5px;"><span style="font-weight: bold;">部门：</span>{{ card.department }}</p>
-                        <p style="padding: 2.5px;"><span style="font-weight: bold;">类型：</span>{{ card.type }}</p>
+                        <p style="padding: 2.5px;"><span style="font-weight: bold;">类型：</span>{{ card.type === 'S' ? '学生' : '教师' }}</p>
                     </div>
 
                     <el-divider />
 
                     <!-- 卡片操作 -->
                     <div style="margin-top: 10px;">
-                        <el-button type="primary" :icon="Edit" @click="this.toModifyInfo.id = card.id, this.toModifyInfo.name = card.name,
-                this.toModifyInfo.department = card.department, this.toModifyInfo.type = card.type,
+                        <el-button type="primary" :icon="Edit" @click="this.toModifyInfo.id = card.cardId, this.toModifyInfo.name = card.name,
+                this.toModifyInfo.department = card.department, this.toModifyInfo.type = card.type === 'S' ? '学生' : '教师',
                 this.modifyCardVisible = true" circle />
                         <el-button type="danger" :icon="Delete" circle
-                            @click="this.toRemove = card.id, this.removeCardVisible = true"
+                            @click="this.toRemove = card.cardId, this.removeCardVisible = true"
                             style="margin-left: 30px;" />
                     </div>
 
@@ -122,28 +122,18 @@
 </template>
 
 <script>
-import { Delete, Edit, Search } from '@element-plus/icons-vue'
+import { Delete, Edit, Search, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
 export default {
     data() {
         return {
-            cards: [{ // 借书证列表
-                id: 1,
-                name: '小明',
-                department: '计算机学院',
-                type: '学生'
-            }, {
-                id: 2,
-                name: '王老师',
-                department: '计算机学院',
-                type: '教师'
-            }
-            ],
+            cards: [],
             Delete,
             Edit,
             Search,
+            Plus,
             toSearch: '', // 搜索内容
             types: [ // 借书证类型
                 {
@@ -173,35 +163,84 @@ export default {
         }
     },
     methods: {
-        ConfirmNewCard() {
-            // 发出POST请求
-            axios.post("/card",
-                { // 请求体
-                    name: this.newCardInfo.name,
-                    department: this.newCardInfo.department,
-                    type: this.newCardInfo.type
-                })
-                .then(response => {
-                    ElMessage.success("借书证新建成功") // 显示消息提醒
-                    this.newCardVisible = false // 将对话框设置为不可见
-                    this.QueryCards() // 重新查询借书证以刷新页面
-                })
+        async ConfirmNewCard() {
+            try {
+                // 发出POST请求
+                await axios.post("http://localhost:8081/card",
+                    { // 请求体
+                        action: "register",
+                        cardId: 0,
+                        name: this.newCardInfo.name,
+                        department: this.newCardInfo.department,
+                        type: this.newCardInfo.type === '学生' ? 'S' : 'T'
+                    });
+                ElMessage.success("借书证新建成功") // 显示消息提醒
+                this.newCardVisible = false // 将对话框设置为不可见
+                this.QueryCards() // 重新查询借书证以刷新页面
+            } catch (error) {
+                console.error('新建失败:', error);
+                if (error.response && error.response.data && error.response.data.error) {
+                    ElMessage.error(error.response.data.error);
+                } else {
+                    ElMessage.error('新建失败，请检查网络连接');
+                }
+            }
         },
-        ConfirmModifyCard() {
-            // TODO: YOUR CODE HERE
+        async ConfirmModifyCard() {
+            try {
+                await axios.post("http://localhost:8081/card",
+                    {
+                        action: "modify",
+                        cardId: this.toModifyInfo.id,
+                        name: this.toModifyInfo.name,
+                        department: this.toModifyInfo.department,
+                        type: this.toModifyInfo.type === '学生' ? 'S' : 'T'
+                    });
+                ElMessage.success("借书证信息修改成功");
+                this.modifyCardVisible = false;
+                this.QueryCards();
+            } catch (error) {
+                console.error('修改失败:', error);
+                if (error.response && error.response.data && error.response.data.error) {
+                    ElMessage.error(error.response.data.error);
+                } else {
+                    ElMessage.error('修改失败，请检查网络连接');
+                }
+            }
         },
-        ConfirmRemoveCard() {
-            // TODO: YOUR CODE HERE
+        async ConfirmRemoveCard() {
+            try {
+                await axios.post("http://localhost:8081/card",
+                    {
+                        action: "remove",
+                        cardID: this.toRemove
+                    });
+                ElMessage.success("借书证删除成功");
+                this.removeCardVisible = false;
+                this.QueryCards();
+            } catch (error) {
+                console.error('删除失败:', error);
+                if (error.response && error.response.data && error.response.data.error) {
+                    ElMessage.error(error.response.data.error);
+                } else {
+                    ElMessage.error('删除失败，请检查网络连接');
+                }
+            }
         },
-        QueryCards() {
-            this.cards = [] // 清空列表
-            let response = axios.get('/card') // 向/card发出GET请求
-                .then(response => {
-                    let cards = response.data // 接收响应负载
-                    cards.forEach(card => { // 对于每个借书证
-                        this.cards.push(card) // 将其加入到列表中
-                    })
+        async QueryCards() {
+            try {
+                this.cards = [] // 清空列表
+                let response = await axios.get('http://localhost:8081/card', {
+                    params: { type: 'records' }
+                }); // 向/card发出GET请求
+                let cards = response.data.records || []; // 接收响应负载
+                cards.forEach(card => { // 对于每个借书证
+                    this.cards.push(card) // 将其加入到列表中
                 })
+            } catch (error) {
+                console.error('查询借书证失败:', error);
+                ElMessage.error('查询借书证失败，请检查网络连接');
+            }
         }
     },
     mounted() { // 当页面被渲染时
